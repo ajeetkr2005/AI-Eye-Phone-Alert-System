@@ -1,11 +1,11 @@
 import os
+import cv2
 import time
 import math
 import base64
 import threading
 
 import av
-import cv2
 import numpy as np
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
@@ -18,7 +18,7 @@ from ultralytics import YOLO
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIGURATION
 # ============================================================
 
 st.set_page_config(
@@ -97,7 +97,7 @@ RIGHT_EYE = [
 
 
 # ============================================================
-# SHARED STATE
+# SHARED DETECTION STATE
 # ============================================================
 
 class DetectionState:
@@ -127,7 +127,6 @@ class DetectionState:
         self.last_timestamp = 0
 
         self.eyes_closed_start = None
-
 
     def snapshot(self):
 
@@ -164,11 +163,28 @@ class DetectionState:
 
 
 # ============================================================
+# CREATE PERSISTENT STATE
+# ============================================================
+
+@st.cache_resource
+def get_state():
+
+    return DetectionState()
+
+
+state = get_state()
+
+
+# ============================================================
 # LOAD AI MODELS
 # ============================================================
 
 @st.cache_resource
 def load_models():
+
+    # --------------------------------------------------------
+    # CHECK MEDIAPIPE MODEL
+    # --------------------------------------------------------
 
     if not os.path.exists(MODEL_PATH):
 
@@ -177,7 +193,7 @@ def load_models():
         )
 
     # --------------------------------------------------------
-    # MediaPipe
+    # MEDIAPIPE
     # --------------------------------------------------------
 
     base_options = python.BaseOptions(
@@ -205,7 +221,6 @@ def load_models():
         )
     )
 
-
     # --------------------------------------------------------
     # YOLO
     # --------------------------------------------------------
@@ -218,13 +233,9 @@ def load_models():
 
     else:
 
-        # Ultralytics downloads the model
-        # automatically if it is not present.
-
         yolo_model = YOLO(
             "yolo11n.pt"
         )
-
 
     return face_detector, yolo_model
 
@@ -242,7 +253,7 @@ def distance(p1, p2):
 
 
 # ============================================================
-# EAR
+# EYE ASPECT RATIO
 # ============================================================
 
 def calculate_ear(points):
@@ -277,7 +288,7 @@ def calculate_ear(points):
 
 
 # ============================================================
-# EAR → PERCENTAGE
+# EAR TO PERCENTAGE
 # ============================================================
 
 def eye_percentage(ear):
@@ -302,7 +313,7 @@ def eye_percentage(ear):
 
 
 # ============================================================
-# FRAME PROCESSING
+# PROCESS VIDEO FRAME
 # ============================================================
 
 def process_frame(
@@ -314,7 +325,6 @@ def process_frame(
         format="bgr24"
     )
 
-
     # ========================================================
     # MIRROR CAMERA
     # ========================================================
@@ -323,7 +333,6 @@ def process_frame(
         image,
         1
     )
-
 
     # ========================================================
     # RESIZE FOR CLOUD PERFORMANCE
@@ -353,9 +362,7 @@ def process_frame(
             interpolation=cv2.INTER_AREA
         )
 
-
     height, width = image.shape[:2]
-
 
     try:
 
@@ -363,10 +370,7 @@ def process_frame(
         # LOAD MODELS
         # ====================================================
 
-        face_detector, yolo_model = (
-            load_models()
-        )
-
+        face_detector, yolo_model = load_models()
 
         # ====================================================
         # MEDIAPIPE
@@ -378,14 +382,13 @@ def process_frame(
         )
 
         mp_image = mp.Image(
-            image_format=
-                mp.ImageFormat.SRGB,
-
+            image_format=mp.ImageFormat.SRGB,
             data=rgb_frame
         )
 
-
-        # MediaPipe requires increasing timestamps.
+        # ====================================================
+        # INCREASING TIMESTAMP
+        # ====================================================
 
         now_ms = int(
             time.monotonic() * 1000
@@ -396,20 +399,20 @@ def process_frame(
             if now_ms <= state.last_timestamp:
 
                 now_ms = (
-                    state.last_timestamp
-                    + 1
+                    state.last_timestamp +
+                    1
                 )
 
             state.last_timestamp = now_ms
 
+        # ====================================================
+        # FACE DETECTION
+        # ====================================================
 
-        result = (
-            face_detector.detect_for_video(
-                mp_image,
-                now_ms
-            )
+        result = face_detector.detect_for_video(
+            mp_image,
+            now_ms
         )
-
 
         # ====================================================
         # DEFAULT EYE VALUES
@@ -423,7 +426,6 @@ def process_frame(
 
         eye_status = "NO FACE"
 
-
         # ====================================================
         # FACE DETECTED
         # ====================================================
@@ -431,7 +433,6 @@ def process_frame(
         if result.face_landmarks:
 
             face = result.face_landmarks[0]
-
 
             def get_point(index):
 
@@ -447,7 +448,6 @@ def process_frame(
                         height
                     )
                 )
-
 
             # ------------------------------------------------
             # LEFT EYE
@@ -466,7 +466,6 @@ def process_frame(
                 left_ear
             )
 
-
             # ------------------------------------------------
             # RIGHT EYE
             # ------------------------------------------------
@@ -484,7 +483,6 @@ def process_frame(
                 right_ear
             )
 
-
             # ------------------------------------------------
             # AVERAGE
             # ------------------------------------------------
@@ -494,40 +492,27 @@ def process_frame(
                 right_percentage
             ) / 2.0
 
-
             # ------------------------------------------------
             # EYE STATUS
             # ------------------------------------------------
 
-            if (
-                average_percentage
-                >= OPEN_THRESHOLD
-            ):
+            if average_percentage >= OPEN_THRESHOLD:
 
                 eye_status = "OPEN"
 
-            elif (
-                average_percentage
-                <= CLOSED_THRESHOLD
-            ):
+            elif average_percentage <= CLOSED_THRESHOLD:
 
                 eye_status = "CLOSED"
 
             else:
 
-                eye_status = (
-                    "PARTIALLY CLOSED"
-                )
-
+                eye_status = "PARTIALLY CLOSED"
 
             # ------------------------------------------------
-            # DRAW EYE POINTS
+            # DRAW LEFT EYE
             # ------------------------------------------------
 
-            for point in (
-                left_points +
-                right_points
-            ):
+            for point in left_points:
 
                 cv2.circle(
                     image,
@@ -537,9 +522,22 @@ def process_frame(
                     -1
                 )
 
+            # ------------------------------------------------
+            # DRAW RIGHT EYE
+            # ------------------------------------------------
+
+            for point in right_points:
+
+                cv2.circle(
+                    image,
+                    point,
+                    3,
+                    (0, 255, 0),
+                    -1
+                )
 
             # ------------------------------------------------
-            # EYE OUTLINES
+            # LEFT EYE OUTLINE
             # ------------------------------------------------
 
             cv2.polylines(
@@ -550,6 +548,10 @@ def process_frame(
                 2
             )
 
+            # ------------------------------------------------
+            # RIGHT EYE OUTLINE
+            # ------------------------------------------------
+
             cv2.polylines(
                 image,
                 [np.array(right_points)],
@@ -558,27 +560,21 @@ def process_frame(
                 2
             )
 
-
         # ====================================================
         # DROWSINESS TIMER
         # ====================================================
 
         current_time = time.monotonic()
 
-
         with state.lock:
 
             if eye_status == "CLOSED":
 
-                if (
-                    state.eyes_closed_start
-                    is None
-                ):
+                if state.eyes_closed_start is None:
 
                     state.eyes_closed_start = (
                         current_time
                     )
-
 
                 closed_duration = (
                     current_time -
@@ -591,7 +587,6 @@ def process_frame(
 
                 closed_duration = 0.0
 
-
         # ====================================================
         # YOLO PHONE DETECTION
         # ====================================================
@@ -600,21 +595,15 @@ def process_frame(
 
         phone_confidence = 0.0
 
-
         yolo_results = yolo_model(
-
             image,
-
             conf=PHONE_CONFIDENCE,
-
             verbose=False,
-
             imgsz=640
         )
 
-
         # ====================================================
-        # PROCESS YOLO
+        # PROCESS YOLO DETECTIONS
         # ====================================================
 
         for detection in yolo_results:
@@ -630,62 +619,50 @@ def process_frame(
                 )
 
                 class_name = str(
-                    yolo_model.names[
-                        class_id
-                    ]
+                    yolo_model.names[class_id]
                 ).lower()
 
+                # ------------------------------------------------
+                # CELL PHONE
+                # ------------------------------------------------
 
                 if class_name in [
-
                     "cell phone",
-
                     "mobile phone",
-
                     "phone"
-
                 ]:
 
                     phone_detected = True
 
                     phone_confidence = max(
-
                         phone_confidence,
-
                         confidence
                     )
 
-
                     x1, y1, x2, y2 = map(
-
                         int,
-
-                        box.xyxy[
-                            0
-                        ].tolist()
+                        box.xyxy[0].tolist()
                     )
 
+                    # --------------------------------------------
+                    # PHONE BOX
+                    # --------------------------------------------
 
                     cv2.rectangle(
-
                         image,
-
                         (x1, y1),
-
                         (x2, y2),
-
                         (0, 0, 255),
-
                         3
                     )
 
+                    # --------------------------------------------
+                    # PHONE LABEL
+                    # --------------------------------------------
 
                     cv2.putText(
-
                         image,
-
                         f"PHONE {confidence:.0%}",
-
                         (
                             x1,
                             max(
@@ -693,16 +670,11 @@ def process_frame(
                                 y1 - 10
                             )
                         ),
-
                         cv2.FONT_HERSHEY_SIMPLEX,
-
                         0.7,
-
                         (0, 0, 255),
-
                         2
                     )
-
 
         # ====================================================
         # ALERT PRIORITY
@@ -725,14 +697,9 @@ def process_frame(
             alert = "PHONE"
 
         elif (
-
             eye_status == "CLOSED"
-
             and
-
-            closed_duration
-            >= DROWSINESS_TIME
-
+            closed_duration >= DROWSINESS_TIME
         ):
 
             alert = "EYE"
@@ -741,42 +708,35 @@ def process_frame(
 
             alert = "NONE"
 
-
         # ====================================================
-        # DASHBOARD
+        # DASHBOARD BACKGROUND
         # ====================================================
 
         cv2.rectangle(
-
             image,
-
             (10, 10),
-
             (490, 285),
-
             (20, 20, 20),
-
             -1
         )
 
+        # ====================================================
+        # DASHBOARD TITLE
+        # ====================================================
 
         cv2.putText(
-
             image,
-
             "AI SAFETY MONITOR",
-
             (25, 42),
-
             cv2.FONT_HERSHEY_SIMPLEX,
-
             0.8,
-
             (0, 255, 255),
-
             2
         )
 
+        # ====================================================
+        # DASHBOARD DATA
+        # ====================================================
 
         dashboard = [
 
@@ -807,26 +767,20 @@ def process_frame(
             f"{alert}"
         ]
 
+        # ====================================================
+        # DRAW DASHBOARD DATA
+        # ====================================================
 
-        for i, text in enumerate(
-            dashboard
-        ):
+        for i, text in enumerate(dashboard):
 
             y = 77 + (
                 i * 30
             )
 
-
             if (
-
-                "Phone      : YES"
-                in text
-
+                "Phone      : YES" in text
                 or
-
-                "Alert      : PHONE"
-                in text
-
+                "Alert      : PHONE" in text
             ):
 
                 color = (
@@ -836,8 +790,7 @@ def process_frame(
                 )
 
             elif (
-                "Alert      : EYE"
-                in text
+                "Alert      : EYE" in text
             ):
 
                 color = (
@@ -847,15 +800,9 @@ def process_frame(
                 )
 
             elif (
-
-                "Eye Status : OPEN"
-                in text
-
+                "Eye Status : OPEN" in text
                 or
-
-                "Phone      : NO"
-                in text
-
+                "Phone      : NO" in text
             ):
 
                 color = (
@@ -872,34 +819,23 @@ def process_frame(
                     255
                 )
 
-
             cv2.putText(
-
                 image,
-
                 text,
-
                 (25, y),
-
                 cv2.FONT_HERSHEY_SIMPLEX,
-
                 0.62,
-
                 color,
-
                 2
             )
 
-
         # ====================================================
-        # ALERT TEXT
+        # LARGE ALERT TEXT
         # ====================================================
 
         if alert == "PHONE":
 
-            alert_text = (
-                "PHONE ALERT!"
-            )
+            alert_text = "PHONE ALERT!"
 
             alert_color = (
                 0,
@@ -909,9 +845,7 @@ def process_frame(
 
         elif alert == "EYE":
 
-            alert_text = (
-                "DROWSINESS ALERT!"
-            )
+            alert_text = "DROWSINESS ALERT!"
 
             alert_color = (
                 0,
@@ -921,9 +855,7 @@ def process_frame(
 
         else:
 
-            alert_text = (
-                "STATUS: SAFE"
-            )
+            alert_text = "STATUS: SAFE"
 
             alert_color = (
                 0,
@@ -931,13 +863,9 @@ def process_frame(
                 0
             )
 
-
         cv2.putText(
-
             image,
-
             alert_text,
-
             (
                 max(
                     10,
@@ -945,16 +873,11 @@ def process_frame(
                 ),
                 45
             ),
-
             cv2.FONT_HERSHEY_SIMPLEX,
-
             0.8,
-
             alert_color,
-
             3
         )
-
 
         # ====================================================
         # UPDATE SHARED STATE
@@ -996,48 +919,38 @@ def process_frame(
 
             state.running = True
 
-
     except Exception as error:
 
+        # ====================================================
+        # PROCESSING ERROR
+        # ====================================================
+
         cv2.putText(
-
             image,
-
             "PROCESSING ERROR",
-
             (25, 45),
-
             cv2.FONT_HERSHEY_SIMPLEX,
-
             0.8,
-
             (0, 0, 255),
-
             2
         )
 
         cv2.putText(
-
             image,
-
-            str(error)[:70],
-
+            str(error)[:80],
             (25, 80),
-
             cv2.FONT_HERSHEY_SIMPLEX,
-
             0.45,
-
             (0, 0, 255),
-
             1
         )
 
+    # ========================================================
+    # RETURN FRAME
+    # ========================================================
 
     return av.VideoFrame.from_ndarray(
-
         image,
-
         format="bgr24"
     )
 
@@ -1057,26 +970,16 @@ st.caption(
 
 
 # ============================================================
-# CHECK MEDIA PIPE MODEL
+# CHECK REQUIRED FILES
 # ============================================================
 
-if not os.path.exists(
-    MODEL_PATH
-):
+if not os.path.exists(MODEL_PATH):
 
     st.error(
-        "❌ Missing "
-        "`models/face_landmarker.task`"
+        "❌ Missing `models/face_landmarker.task`"
     )
 
     st.stop()
-
-
-# ============================================================
-# STATE
-# ============================================================
-
-state = DetectionState()
 
 
 # ============================================================
@@ -1104,9 +1007,29 @@ with st.sidebar:
         "over eye alert."
     )
 
+    st.markdown(
+        "---"
+    )
+
+    st.write(
+        "### 🧠 AI Models"
+    )
+
+    st.write(
+        "👁️ MediaPipe Face Landmarker"
+    )
+
+    st.write(
+        "📱 YOLO11 Phone Detection"
+    )
+
+    st.write(
+        "🎥 Browser Webcam"
+    )
+
 
 # ============================================================
-# WEBRTC
+# WEBRTC CONFIGURATION
 # ============================================================
 
 rtc_configuration = {
@@ -1123,6 +1046,10 @@ rtc_configuration = {
 
 }
 
+
+# ============================================================
+# WEBRTC CAMERA
+# ============================================================
 
 webrtc_ctx = webrtc_streamer(
 
@@ -1165,44 +1092,29 @@ def live_status():
 
     data = state.snapshot()
 
-
-    # --------------------------------------------------------
+    # ========================================================
     # METRICS
-    # --------------------------------------------------------
+    # ========================================================
 
-    col1, col2, col3, col4 = (
-        st.columns(4)
-    )
-
+    col1, col2, col3, col4 = st.columns(4)
 
     col1.metric(
-
         "Left Eye",
-
         f"{data['left_percentage']:.1f}%"
     )
 
-
     col2.metric(
-
         "Right Eye",
-
         f"{data['right_percentage']:.1f}%"
     )
 
-
     col3.metric(
-
         "Average",
-
         f"{data['average_percentage']:.1f}%"
     )
 
-
     col4.metric(
-
         "Phone",
-
         (
             "DETECTED"
             if data["phone_detected"]
@@ -1210,30 +1122,54 @@ def live_status():
         )
     )
 
+    # ========================================================
+    # EYE STATUS
+    # ========================================================
 
-    # --------------------------------------------------------
+    if data["eye_status"] == "OPEN":
+
+        st.success(
+            "👁️ Eyes OPEN"
+        )
+
+    elif data["eye_status"] == "CLOSED":
+
+        st.warning(
+            f"👁️ Eyes CLOSED — "
+            f"{data['closed_duration']:.1f}s"
+        )
+
+    elif data["eye_status"] == "PARTIALLY CLOSED":
+
+        st.warning(
+            "👁️ Eyes PARTIALLY CLOSED"
+        )
+
+    else:
+
+        st.info(
+            "👤 No face detected"
+        )
+
+    # ========================================================
     # ALERT
-    # --------------------------------------------------------
+    # ========================================================
 
     if data["alert"] == "PHONE":
 
         st.error(
-
             f"📱 PHONE ALERT — "
             f"confidence "
             f"{data['phone_confidence']:.0%}"
         )
 
-
     elif data["alert"] == "EYE":
 
         st.warning(
-
             f"😴 DROWSINESS ALERT — "
             f"eyes closed for "
             f"{data['closed_duration']:.1f}s"
         )
-
 
     else:
 
@@ -1241,37 +1177,31 @@ def live_status():
             "✅ STATUS: SAFE"
         )
 
-
-    # --------------------------------------------------------
+    # ========================================================
     # BROWSER AUDIO
-    # --------------------------------------------------------
-    #
-    # Browser autoplay policies require
-    # the user to interact with the page.
-    #
-    # Click "Enable Alert Sounds" once.
-    #
-    # --------------------------------------------------------
+    # ========================================================
 
     alert = data["alert"]
-
 
     audio_html = (
         "<div>Alert sounds unavailable.</div>"
     )
 
+    # ========================================================
+    # CHECK AUDIO FILES
+    # ========================================================
 
     if (
-
         os.path.exists(EYE_AUDIO)
-
         and
-
         os.path.exists(PHONE_AUDIO)
-
     ):
 
         try:
+
+            # ------------------------------------------------
+            # EYE AUDIO
+            # ------------------------------------------------
 
             with open(
                 EYE_AUDIO,
@@ -1288,6 +1218,9 @@ def live_status():
                     )
                 )
 
+            # ------------------------------------------------
+            # PHONE AUDIO
+            # ------------------------------------------------
 
             with open(
                 PHONE_AUDIO,
@@ -1304,6 +1237,9 @@ def live_status():
                     )
                 )
 
+            # ------------------------------------------------
+            # AUDIO HTML
+            # ------------------------------------------------
 
             audio_html = f"""
 
@@ -1334,7 +1270,6 @@ def live_status():
 
             </div>
 
-
             <script>
 
             (() => {{
@@ -1348,30 +1283,24 @@ def live_status():
                 const alert =
                     "{alert}";
 
-
                 window.__aiAlertAudio =
                     window.__aiAlertAudio ||
                     new Audio();
 
-
                 const audio =
                     window.__aiAlertAudio;
 
-
                 audio.loop = true;
-
 
                 const button =
                     document.getElementById(
                         "enable-alerts"
                     );
 
-
                 const status =
                     document.getElementById(
                         "sound-status"
                     );
-
 
                 if (
                     button &&
@@ -1380,29 +1309,23 @@ def live_status():
 
                     button.dataset.bound = "1";
 
-
                     button.onclick =
                         async () => {{
 
                         window.__aiAlertsEnabled =
                             true;
 
-
                         try {{
 
                             audio.src =
                                 eyeSrc;
 
-
                             await audio.play();
-
 
                             audio.pause();
 
-
                             audio.currentTime =
                                 0;
-
 
                             status.textContent =
                                 "🔊 Sounds enabled";
@@ -1420,13 +1343,11 @@ def live_status():
 
                 }}
 
-
                 if (
                     window.__aiAlertsEnabled
                 ) {{
 
                     let wantedSrc = "";
-
 
                     if (
                         alert === "PHONE"
@@ -1446,7 +1367,6 @@ def live_status():
 
                     }}
 
-
                     if (!wantedSrc) {{
 
                         audio.pause();
@@ -1459,6 +1379,9 @@ def live_status():
                         );
 
                         audio.load();
+
+                        audio.dataset.alert =
+                            "";
 
                     }}
 
@@ -1480,7 +1403,6 @@ def live_status():
 
                         }}
 
-
                         audio.play()
                             .catch(
                                 () => {{}}
@@ -1496,7 +1418,6 @@ def live_status():
 
             """
 
-
         except Exception:
 
             audio_html = (
@@ -1505,7 +1426,6 @@ def live_status():
                 "could not be loaded."
                 "</div>"
             )
-
 
     st.html(
         audio_html,
@@ -1540,6 +1460,9 @@ else:
 # FOOTER
 # ============================================================
 
+st.divider()
+
 st.caption(
-    "Developed by Ajeet Kumar ❤️"
+    "Developed by Ajeet Kumar | "
+    "AI Eye & Phone Alert System"
 )
