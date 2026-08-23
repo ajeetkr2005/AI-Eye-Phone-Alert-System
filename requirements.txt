@@ -5,3 +5,4 @@ numpy
 mediapipe
 ultralytics
 av
+python-3.11
